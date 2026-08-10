@@ -1,0 +1,224 @@
+# User Stories — AWS Lambda Shutdown of AWS Services
+
+## Overview
+
+This document describes the user stories for creating an **AWS Lambda** responsible for forcibly shutting down AWS services that keep running indefinitely. The Lambda reads a **JSON configuration file** that defines:
+
+- Which services should be scanned;
+- The times and days of the week for each service;
+- The general configuration (default days/times and notification email);
+- The automatic generation of the **EventBridge Schedulers** that trigger the Lambda.
+
+If any service item is not shut down or an error occurs, an email is sent via **AWS SNS** to the email configured in the general section of the JSON.
+
+## JSON Configuration File (Example)
+
+```json
+{
+  "general": {
+    "schedule": {
+      "daysOfWeek": ["MON", "TUE", "WED", "THU", "FRI"],
+      "times": ["18:00", "22:00"]
+    },
+    "notification": {
+      "email": "jamilvilela@gmail.com"
+    }
+  },
+  "services": [
+    {
+      "name": "ec2",
+      "enabled": true,
+      "schedule": {
+        "daysOfWeek": ["MON", "WED", "FRI"],
+        "times": ["19:00", "23:00"]
+      }
+    },
+    {
+      "name": "rds",
+      "enabled": true
+    },
+    {
+      "name": "ecs",
+      "enabled": false
+    }
+  ]
+}
+```
+
+---
+
+## User Stories
+
+### US-001 — Configure services via JSON file
+
+**As** an AWS infrastructure administrator,
+**I want** to configure in a JSON file the list of services to be scanned by the Lambda,
+**So that** I can control which services will be shut down without changing the Lambda code.
+
+**Acceptance criteria:**
+- The JSON file must contain a list of services to be scanned.
+- The Lambda must read the JSON file at the start of each execution.
+- Only the services listed in the JSON must be shut down.
+- If the JSON file is missing or invalid, the execution must be interrupted and an error notification must be sent via SNS to the email **jamilvilela@gmail.com**.
+- Since the JSON may be missing/invalid, the fallback email must be configured outside the JSON (e.g., environment variable `FALLBACK_NOTIFICATION_EMAIL`).
+
+**Expected result:** The Lambda shuts down only the services listed in the JSON file.
+
+---
+
+### US-002 — General configuration of times and days of the week
+
+**As** an AWS infrastructure administrator,
+**I want** to define the default times and days of the week in the general section of the JSON file,
+**So that** services without a specific configuration are shut down at those times.
+
+**Acceptance criteria:**
+- The `general.schedule` section must contain default `daysOfWeek` and `times` (list of times).
+- The `general.notification.email` section must contain the notification email.
+- Services without their own `schedule` must use the general configuration.
+- The general configuration is mandatory; without it, the JSON must be considered invalid.
+
+**Expected result:** All services without a specific configuration are shut down at the times and days of the week defined in the general configuration.
+
+---
+
+### US-003 — Per-service specific configuration
+
+**As** an AWS infrastructure administrator,
+**I want** to define specific times and days of the week for each service,
+**So that** each service can be shut down at different times.
+
+**Acceptance criteria:**
+- Each item in the `services` list can have its own `schedule` with `daysOfWeek` and `times` (list of times).
+- The service-specific configuration must override the general configuration.
+- If the service has no `schedule`, it must use the general configuration.
+- The JSON must be rejected if it contains invalid fields or values outside the expected pattern.
+
+**Expected result:** Each service is shut down according to its specific configuration or, in its absence, according to the general configuration.
+
+---
+
+### US-004 — Forced shutdown of all service items
+
+**As** an AWS infrastructure administrator,
+**I want** the Lambda to forcibly shut down all items of each configured service,
+**So that** no resource keeps running indefinitely.
+
+**Acceptance criteria:**
+- The Lambda must list all active items of each configured service.
+- All found items must be forcibly shut down (force stop/terminate).
+- Items already shut down must be ignored, without generating an error.
+- The shutdown must be applied to all items, without exception.
+
+**Expected result:** All items of each configured service are forcibly shut down.
+
+---
+
+### US-005 — Email notification on failure
+
+**As** an AWS infrastructure administrator,
+**I want** to receive an email via AWS SNS when an item is not shut down or an error occurs,
+**So that** I can act quickly on resources that were not shut down.
+
+**Acceptance criteria:**
+- The email must be sent via AWS SNS to the email configured in `general.notification.email`.
+- The email must be sent when a service item is not shut down.
+- The email must be sent when an error occurs during execution.
+- The email must contain details: service, item, failure reason, and execution time.
+- If there are no failures, no email must be sent.
+
+**Expected result:** The administrator receives an email with the details of each failure or item not shut down.
+
+---
+
+### US-006 — Automatic EventBridge Scheduler generation
+
+**As** an AWS infrastructure administrator,
+**I want** the JSON file configuration to automatically generate the EventBridge Schedulers,
+**So that** the Lambda runs automatically at the configured times and days.
+
+**Acceptance criteria:**
+- A scheduler must be created for each unique time in the effective schedules (shared by all services scheduled at that time).
+- The scheduler must trigger the Lambda at each time and on the configured days.
+- The generation must be idempotent: re-runs must not duplicate schedulers.
+- Schedulers of removed configurations must be removed.
+
+**Expected result:** The Lambda runs automatically according to the times and days defined in the JSON file.
+
+---
+
+### US-007 — Enable/disable individual services via config
+
+**As** an AWS infrastructure administrator,
+**I want** to enable or disable each service through an `enabled` key on each service entry in `config.json`,
+**So that** I can pause shutdowns for specific services without removing them from the config.
+
+**Acceptance criteria:**
+- Each service entry may have an `enabled` key that must be a boolean (default `true`).
+- When `false`, the service must be skipped by the Lambda: its items are never shut down.
+- EventBridge Schedulers are generated per unique day/time from the effective schedules of **all** services and are always **ENABLED**; the `enabled` flag must not disable, enable, delete, or create any scheduler.
+- Re-running the generation with a changed `enabled` flag must not alter the set of schedulers.
+
+**Expected result:** Setting `enabled: false` on a service prevents the Lambda from shutting it down, while its schedule remains unchanged and its scheduler stays ENABLED in the EventBridge Scheduler console.
+
+---
+
+## Technical Acceptance Criteria
+
+### AWS Resources
+- **Lambda:** `aws-lambda-shutdown` — Python 3.11 runtime (or Node.js 20.x).
+- **Configuration file:** `config.json` stored in the Lambda package or in an S3 bucket.
+- **SNS topic:** `aws-lambda-shutdown-sns` (email subscription).
+- **EventBridge Schedulers:** name in the pattern `shutdown-<HHMM>` (e.g., `shutdown-0300`); one scheduler per unique time, always **ENABLED**, generated from the union of all services' effective schedules (the `enabled` flag does not affect them).
+
+### IAM Permissions (Lambda role)
+- `ec2:DescribeInstances`, `ec2:StopInstances`, `ec2:TerminateInstances`
+- `rds:DescribeDBInstances`, `rds:StopDBInstance`
+- `ecs:ListServices`, `ecs:DescribeServices`, `ecs:UpdateService`
+- `sns:Publish`
+- `scheduler:CreateSchedule`, `scheduler:GetSchedule`, `scheduler:ListSchedules`, `scheduler:DeleteSchedule`
+- `s3:GetObject` (if `config.json` is stored in S3)
+
+### Lambda environment variables
+- `CONFIG_FILE` — path to `config.json`.
+- `SNS_TOPIC_ARN` — ARN of the SNS topic.
+- `FALLBACK_NOTIFICATION_EMAIL` — email used when the JSON is missing/invalid (`jamilvilela@gmail.com`).
+
+### JSON validation (JSON Schema)
+- `schedule.times` must be a list of times in `HH:MM` (24h) format, e.g., `["18:00", "22:00"]`.
+- `daysOfWeek` must contain only valid values: `MON`, `TUE`, `WED`, `THU`, `FRI`, `SAT`, `SUN`.
+- `services[].enabled` must be a boolean, when present (default `true`).
+- The `general` section is mandatory; without it the JSON is invalid.
+- Missing/invalid JSON → execution interrupted + error email via SNS to `jamilvilela@gmail.com`.
+
+### Email notification format (SNS)
+- **Subject:** `[aws-lambda-shutdown] Shutdown failure - <service>`
+- **Body:** service, item, failure reason, execution time, and region.
+
+---
+
+## Solution Flow Diagram
+
+```mermaid
+flowchart TD
+    subgraph Config[Configuration]
+        A[config.json] --> B[Generate EventBridge Schedulers]
+        B --> C[Scheduler per combination of days/times]
+    end
+
+    subgraph Exec[Execution]
+        C --> D[Scheduler triggers the Lambda]
+        D --> E[Lambda reads config.json]
+        E --> F{Valid JSON?}
+        F -- No --> G[Abort execution]
+        G --> H[Email via SNS to jamilvilela@gmail.com]
+        F -- Yes --> I[For each configured service]
+        I --> J{Current time / day matches?}
+        J -- No --> K[Skip service]
+        J -- Yes --> L[List active items of the service]
+        L --> M[Forcibly shut down all items]
+        M --> N{Any item failed or error?}
+        N -- No --> O[End - no notification]
+        N -- Yes --> P[Email via SNS with failure details]
+    end
+```

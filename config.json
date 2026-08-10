@@ -1,0 +1,49 @@
+{
+  "general": {
+    "schedule": {
+      "daysOfWeek": ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"],
+      "times": ["03:00", "06:00", "22:00", "23:59"]
+    },
+    "notification": {
+      "email": "jamilvilela@gmail.com"
+    }
+  },
+  "services": [
+    {
+      "name": "ec2",
+      "enabled": true
+    },
+    {
+      "name": "rds",
+      "enabled": true
+    },
+    {
+      "name": "ecs",
+      "enabled": true
+    },
+    {
+      "name": "glue-batch",
+      "enabled": true
+    },
+    {
+      "name": "glue-stream",
+      "enabled": false
+    },
+    {
+      "name": "aurora",
+      "enabled": true
+    },
+    {
+      "name": "batch",
+      "enabled": true
+    },
+    {
+      "name": "dms",
+      "enabled": true
+    },
+    {
+      "name": "dms-serverless",
+      "enabled": true
+    }
+  ]
+}
