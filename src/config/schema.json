@@ -8,12 +8,13 @@
       "type": "object",
       "required": ["schedule", "notification"],
       "properties": {
+        "timezone": { "type": "string", "minLength": 1, "default": "UTC" },
         "schedule": { "$ref": "#/definitions/schedule" },
         "notification": {
           "type": "object",
           "required": ["email"],
           "properties": {
-            "email": { "type": "string", "format": "email" }
+            "email": { "type": "string", "minLength": 3, "format": "email" }
           }
         }
       }

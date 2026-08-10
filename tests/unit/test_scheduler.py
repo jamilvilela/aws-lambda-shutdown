@@ -66,23 +66,24 @@ def _disabled_config(*service_flags: bool) -> dict:
     return cfg
 
 
-def test_generate_disabled_shared_time_stays_enabled():
-    """Schedulers are tied to day/time, so `enabled` does not disable them."""
+def test_generate_disabled_shared_time_is_disabled():
+    """All services disabled -> schedulers kept in DISABLED (not deleted)."""
     scheduler = MagicMock()
     scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": []}]
     config = validate_config(_disabled_config(False, False))
     gen = SchedulerGenerator(scheduler, "arn:lambda", "arn:role")
     result = gen.generate(config)
-    # All services' times still produce schedulers, always ENABLED
     assert set(result["created"]) == {"shutdown-0300", "shutdown-2200"}
+    assert set(result["disabled"]) == {"shutdown-0300", "shutdown-2200"}
+    assert result["enabled"] == []
     assert result["removed"] == []
     for call in scheduler.create_schedule.call_args_list:
-        assert call.kwargs["State"] == "ENABLED"
+        assert call.kwargs["State"] == "DISABLED"
     scheduler.update_schedule.assert_not_called()
 
 
-def test_generate_disabled_exclusive_time_stays_enabled():
-    """A time served only by a disabled service still gets an ENABLED scheduler."""
+def test_generate_disabled_exclusive_time_is_disabled():
+    """A time served only by a disabled service is kept but DISABLED."""
     scheduler = MagicMock()
     scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": []}]
     cfg = {
@@ -100,7 +101,47 @@ def test_generate_disabled_exclusive_time_stays_enabled():
     result = gen.generate(config)
     by_name = {c.kwargs["Name"]: c.kwargs for c in scheduler.create_schedule.call_args_list}
     assert by_name["shutdown-0300"]["State"] == "ENABLED"
-    assert by_name["shutdown-2200"]["State"] == "ENABLED"
+    assert by_name["shutdown-2200"]["State"] == "DISABLED"
+    assert result["enabled"] == ["shutdown-0300"]
+    assert result["disabled"] == ["shutdown-2200"]
+
+
+def test_generate_disables_existing_scheduler_on_reenable_change():
+    """An existing ENABLED scheduler becomes DISABLED when its services are disabled."""
+    scheduler = MagicMock()
+    existing = [
+        {"Name": "shutdown-0300", "State": "ENABLED"},
+        {"Name": "shutdown-2200", "State": "DISABLED"},
+    ]
+    scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": existing}]
+    config = validate_config(_disabled_config(False, False))
+    gen = SchedulerGenerator(scheduler, "arn:lambda", "arn:role")
+    result = gen.generate(config)
+    assert result["created"] == []
+    assert result["removed"] == []
+    assert result["disabled"] == ["shutdown-0300"]
+    assert result["enabled"] == []
+    scheduler.update_schedule.assert_called_once_with(Name="shutdown-0300", State="DISABLED")
+
+
+def test_generate_enables_existing_scheduler_when_services_enabled():
+    """An existing DISABLED scheduler is re-enabled when a service comes back."""
+    scheduler = MagicMock()
+    existing = [
+        {"Name": "shutdown-0300", "State": "DISABLED"},
+        {"Name": "shutdown-2200", "State": "DISABLED"},
+    ]
+    scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": existing}]
+    config = validate_config(SMALL_CONFIG)
+    gen = SchedulerGenerator(scheduler, "arn:lambda", "arn:role")
+    result = gen.generate(config)
+    assert result["created"] == []
+    assert result["removed"] == []
+    assert set(result["enabled"]) == {"shutdown-0300", "shutdown-2200"}
+    assert result["disabled"] == []
+    assert scheduler.update_schedule.call_count == 2
+    for call in scheduler.update_schedule.call_args_list:
+        assert call.kwargs["State"] == "ENABLED"
 
 
 def test_generate_unions_days_across_services_per_time():
@@ -126,12 +167,48 @@ def test_generate_idempotent():
     gen = SchedulerGenerator(scheduler, "arn:lambda", "arn:role")
     r1 = gen.generate(config)
     assert len(r1["created"]) == 2
-    # Second run: existing schedulers
-    existing = [{"Name": name} for name in r1["created"]]
+    # Second run: existing schedulers in the correct state
+    existing = [{"Name": name, "State": "ENABLED"} for name in r1["created"]]
     scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": existing}]
     r2 = gen.generate(config)
     assert r2["created"] == []
     assert r2["removed"] == []
+    assert r2["enabled"] == []
+    assert r2["disabled"] == []
+    scheduler.update_schedule.assert_not_called()
+
+
+def test_generate_uses_configured_timezone():
+    scheduler = MagicMock()
+    scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": []}]
+    cfg = dict(SMALL_CONFIG)
+    cfg["general"] = {**cfg["general"], "timezone": "America/Sao_Paulo"}
+    config = validate_config(cfg)
+    gen = SchedulerGenerator(scheduler, "arn:lambda", "arn:role")
+    gen.generate(config)
+    for call in scheduler.create_schedule.call_args_list:
+        assert call.kwargs["ScheduleExpressionTimezone"] == "America/Sao_Paulo"
+
+
+def test_remove_all_deletes_every_managed_scheduler():
+    scheduler = MagicMock()
+    existing = [{"Name": "shutdown-0300"}, {"Name": "shutdown-2200"}]
+    scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": existing}]
+    gen = SchedulerGenerator(scheduler)
+    result = gen.remove_all()
+    assert set(result["removed"]) == {"shutdown-0300", "shutdown-2200"}
+    assert scheduler.delete_schedule.call_count == 2
+    scheduler.delete_schedule.assert_any_call(Name="shutdown-0300")
+    scheduler.delete_schedule.assert_any_call(Name="shutdown-2200")
+
+
+def test_remove_all_with_no_schedulers():
+    scheduler = MagicMock()
+    scheduler.get_paginator.return_value.paginate.return_value = [{"Schedules": []}]
+    gen = SchedulerGenerator(scheduler)
+    result = gen.remove_all()
+    assert result["removed"] == []
+    scheduler.delete_schedule.assert_not_called()
 
 
 def test_generate_cleanup_removed():

@@ -15,6 +15,9 @@
 # Observações:
 #   - O pacote da Lambda é gerado pelo próprio Terraform (provider archive),
 #     sem etapa externa de zip via shell.
+#   - As dependências de runtime (jsonschema e afins) são empacotadas em uma
+#     Lambda Layer via ./scripts/build-layer.sh (executado automaticamente antes
+#     do apply). boto3/botocore são fornecidos pelo runtime.
 #   - Os EventBridge Schedulers não são gerenciados pelo Terraform; após o
 #     apply, gere-os com `python -m src generate-schedulers` (ver README).
 #===============================================================================
@@ -25,7 +28,8 @@ set -euo pipefail
 ENV="prod"
 REGION="${AWS_REGION:-us-east-1}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "000000000000")
-TERRAFORM_DIR="$(cd "$(dirname "$0")/../infra" && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TERRAFORM_DIR="${REPO_ROOT}/infra"
 TFVARS_FILE="${TERRAFORM_DIR}/terraform.tfvars"
 TFVARS_EXAMPLE="${TERRAFORM_DIR}/terraform.tfvars.example"
 
@@ -122,6 +126,13 @@ select_workspace() {
     log_ok "Workspace '${ENV}' ativo"
 }
 
+# ─── Construir a Lambda Layer (deps de runtime) ──────────────────────────────
+build_layer() {
+    log_info "Construindo a Lambda Layer (deps de runtime) ..."
+    "${REPO_ROOT}/scripts/build-layer.sh"
+    log_ok "Lambda Layer construída"
+}
+
 # ─── Aplicar Terraform ───────────────────────────────────────────────────────
 apply_terraform() {
     log_info "Aplicando Terraform..."
@@ -170,6 +181,7 @@ main() {
     check_prerequisites
     init_terraform
     select_workspace
+    build_layer
     apply_terraform
     print_summary
 }

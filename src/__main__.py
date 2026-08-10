@@ -17,6 +17,7 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     gen = sub.add_parser("generate-schedulers", help="Generate EventBridge Schedulers from config.json")
     gen.add_argument("--config", default=None, help="Path to config.json (default: CONFIG_FILE env or config.json)")
+    rm = sub.add_parser("remove-schedulers", help="Delete all EventBridge Schedulers (shutdown-*)")
     args = parser.parse_args()
 
     if args.command == "generate-schedulers":
@@ -27,6 +28,10 @@ def main() -> int:
             scheduler_role_arn=os.environ["SCHEDULER_ROLE_ARN"],
         )
         result = generator.generate(config)
+        print(json.dumps(result, indent=2))
+    elif args.command == "remove-schedulers":
+        generator = SchedulerGenerator(scheduler=boto3.client("scheduler"))
+        result = generator.remove_all()
         print(json.dumps(result, indent=2))
     return 0
 

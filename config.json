@@ -1,5 +1,6 @@
 {
   "general": {
+    "timezone": "America/Sao_Paulo",
     "schedule": {
       "daysOfWeek": ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"],
       "times": ["03:00", "06:00", "22:00", "23:59"]
@@ -31,7 +32,11 @@
     },
     {
       "name": "aurora",
-      "enabled": true
+      "enabled": true,
+      "schedule": {
+        "daysOfWeek": ["MON"],
+        "times": ["01:30"]
+      }
     },
     {
       "name": "batch",

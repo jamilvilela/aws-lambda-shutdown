@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Any, Dict
+from zoneinfo import ZoneInfo
 
 import boto3
 
@@ -38,8 +39,13 @@ def _build_notifier() -> SNSNotifier:
     )
 
 
-def _resolve_now(event: Dict[str, Any]) -> datetime | None:
-    """Extract the scheduled time ("HH:MM") from the Scheduler event, if present."""
+def _resolve_now(event: Dict[str, Any], tz: ZoneInfo | None = None) -> datetime | None:
+    """Extract the scheduled time ("HH:MM") from the Scheduler event, if present.
+
+    When ``tz`` is given, the resulting datetime is interpreted in that
+    timezone (the weekday/date come from the current time there); otherwise a
+    naive UTC-style datetime is returned.
+    """
     trigger = (event or {}).get("time")
     if not trigger:
         return None
@@ -47,19 +53,24 @@ def _resolve_now(event: Dict[str, Any]) -> datetime | None:
         time = datetime.strptime(trigger, "%H:%M").time()
     except ValueError:
         return None
+    if tz is not None:
+        return datetime.combine(datetime.now(tz).date(), time, tzinfo=tz)
     return datetime.combine(datetime.now().date(), time)
 
 
 def lambda_handler(event: Dict[str, Any], context: Any, now: datetime | None = None) -> Dict[str, Any]:
     """Entry point invoked by EventBridge Scheduler."""
-    now = now or _resolve_now(event) or datetime.now()
     try:
         config = validate_config(load_config())
     except (ConfigLoadError, ConfigValidationError) as exc:
         logger.error("Configuration error: %s", exc)
         notifier = _build_notifier()
-        notifier.notify_error(str(exc), now)
+        notifier.notify_error(str(exc), now or _resolve_now(event) or datetime.now())
         raise
+
+    if now is None:
+        tz = ZoneInfo(config.general.timezone)
+        now = _resolve_now(event, tz) or datetime.now(tz)
 
     factory = ServiceFactory(_build_clients())
     failures = []

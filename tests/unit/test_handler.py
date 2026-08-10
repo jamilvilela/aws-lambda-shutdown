@@ -1,11 +1,13 @@
 """Integration-style tests for the main handler flow."""
 
+import datetime as _dt
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from src.config.loader import ConfigLoadError
-from src.handler import lambda_handler
+from src.handler import _resolve_now, lambda_handler
 
 
 VALID_CONFIG = {
@@ -178,7 +180,6 @@ def test_lambda_handler_uses_scheduled_time_from_event(mock_load, mock_notifier,
         # Event carries the scheduled time; no `now` injected
         event = {"time": "22:00"}
         context = MagicMock()
-        import datetime as _dt
 
         with patch("src.handler.datetime", wraps=_dt.datetime) as mock_datetime:
             mock_datetime.now.return_value = monday_0300
@@ -186,3 +187,14 @@ def test_lambda_handler_uses_scheduled_time_from_event(mock_load, mock_notifier,
 
         assert result["services_processed"] == 2
         assert mock_factory.create.call_count == 2
+
+
+def test_resolve_now_uses_local_day_from_configured_timezone():
+    """`_resolve_now` with a tz uses the day in that timezone and the event time."""
+    aware_now = _dt.datetime(2024, 1, 1, 23, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    with patch("src.handler.datetime", wraps=_dt.datetime) as mock_datetime:
+        mock_datetime.now.return_value = aware_now
+        resolved = _resolve_now({"time": "23:00"}, ZoneInfo("America/Sao_Paulo"))
+    assert resolved is not None
+    assert resolved.weekday() == 0  # Monday
+    assert resolved.strftime("%H:%M") == "23:00"

@@ -38,6 +38,18 @@ variable "lambda_output_path" {
   default     = "../dist/lambda.zip"
 }
 
+variable "layer_source_path" {
+  description = "Path to the directory prepared by scripts/build-layer.sh (contains python/lib/python3.x/site-packages)"
+  type        = string
+  default     = "../build/layer"
+}
+
+variable "layer_output_path" {
+  description = "Path where the Lambda layer package will be created"
+  type        = string
+  default     = "../dist/layer.zip"
+}
+
 variable "config_file_path" {
   description = "Path to the config.json file"
   type        = string

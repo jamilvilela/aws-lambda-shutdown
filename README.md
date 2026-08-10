@@ -9,10 +9,10 @@ A serverless solution that **forcibly shuts down AWS services that are running i
 - **Config-driven**: one `config.json` defines the general schedule, the notification email, and the list of services to shut down.
 - **9 supported services**: EC2, RDS, ECS, Glue (batch & streaming), Aurora, Batch, DMS, and DMS Serverless.
 - **Per-service schedules**: each service can override the general schedule (days/times as a list).
-- **Idempotent scheduler generation**: EventBridge Schedulers are created/removed to match the config exactly — safe to re-run.
+- **Idempotent scheduler generation**: EventBridge Schedulers are created/updated/removed to match the config exactly — safe to re-run. Schedules served only by `enabled: false` services are kept but set to **DISABLED**.
 - **Failure notifications**: an SNS email is sent when items fail to shut down or when a configuration error occurs.
 - **Terraform-managed infrastructure** (no CloudFormation).
-- **Fully unit-tested** (39 tests) with dependency injection for easy testing.
+- **Fully unit-tested** (46 tests) with dependency injection for easy testing.
 
 ---
 
@@ -39,7 +39,7 @@ flowchart LR
 
     CF --> CLI
     CLI --> GEN
-    GEN -->|create/delete schedules| ES
+    GEN -->|create/update/delete schedules| ES
     ES -->|invoke on schedule| L
     L -->|read config| CF
     L -->|stop resources| SVC
@@ -66,9 +66,9 @@ flowchart LR
 EventBridge Schedulers are **not** managed by Terraform because their schedule depends on the JSON config. Instead, they are generated from `config.json`:
 
 1. For each service, the effective schedule is resolved (`service.schedule` or `general.schedule`).
-2. For each unique time in the effective schedules, a scheduler named `shutdown-<HHMM>` is created with a cron expression like `cron(0 3 ? * MON,WED,FRI *)` (UTC). When it fires, the Lambda inspects `config.json` and shuts down **all** services whose schedule matches that time.
-3. Existing `shutdown-*` schedulers that are no longer in the config are deleted.
-4. The operation is **idempotent** — re-running only creates missing schedulers and removes stale ones.
+2. For each unique time in the effective schedules, a scheduler named `shutdown-<HHMM>` is created with a cron expression like `cron(0 3 ? * MON,WED,FRI *)` (UTC). When it fires, the Lambda inspects `config.json` and shuts down **all** services whose schedule matches that time. The scheduler is created **ENABLED** when at least one enabled service contributes to that time; a time served only by `enabled: false` services is kept but set to **DISABLED** (so re-enabling the service flips it back without recreating it).
+3. Existing `shutdown-*` schedulers with the wrong state are **enabled/disabled** to match, and schedulers that are no longer in the config are deleted.
+4. The operation is **idempotent** — re-running only creates missing schedulers, corrects states, and removes stale ones.
 
 This can be run via the CLI (`generate-schedulers`) or the `generate_schedulers_handler` Lambda entry point.
 
@@ -76,7 +76,7 @@ This can be run via the CLI (`generate-schedulers`) or the `generate_schedulers_
 
 When an EventBridge Scheduler fires, it invokes `lambda_handler`:
 
-1. **Load & validate** the config (from a local file or `s3://` URL) using Pydantic models.
+1. **Load & validate** the config (from a local file or `s3://` URL) using jsonschema plus dataclass models.
 2. **Match the schedule** — for each service, check if the current day/time is in its effective schedule; skip it otherwise.
 3. **Shut down** — for each matching service, the factory creates the appropriate handler, which lists active items and stops them (e.g. `ec2:StopInstances`, `rds:StopDBInstance`, `ecs:UpdateService` with `desiredCount=0`, `batch:TerminateJob`, `dms:StopReplicationTask`, etc.).
 4. **Notify** — if any item failed to shut down, an SNS email is sent with the list of failures. If the config itself is invalid/missing, an error notification is sent and the exception is re-raised.
@@ -114,25 +114,30 @@ aws-lambda-shutdown/
 ├── src/
 │   ├── handler.py               # lambda_handler + generate_schedulers_handler
 │   ├── notifier.py              # SNS failure/error notifications
-│   ├── __main__.py              # CLI (generate-schedulers)
+│   ├── __main__.py              # CLI (generate-schedulers / remove-schedulers)
 │   ├── config/
-│   │   ├── models.py            # Pydantic models (Schedule, Service, Config...)
+│   │   ├── models.py            # Dataclass models (Schedule, Service, Config...)
 │   │   ├── loader.py            # Load config from file or S3
-│   │   ├── validator.py         # Validate config via Pydantic
+│   │   ├── validator.py         # Validate config via jsonschema
 │   │   └── schema.json          # JSON Schema for the config
 │   ├── schedule/
 │   │   └── matcher.py           # Day/time matching logic
 │   ├── scheduler/
-│   │   └── generator.py         # EventBridge Scheduler create/delete
+│   │   └── generator.py         # EventBridge Scheduler create/update/delete + remove_all
 │   └── services/
 │       ├── base.py              # ServiceHandler ABC + Failure
 │       ├── registry.py          # service name → handler class
 │       ├── factory.py           # handler creation with DI
 │       └── *_handler.py         # one handler per service
+├── scripts/
+│   ├── build-layer.sh           # Staged Lambda layer (deps de runtime, ex.: jsonschema)
+│   ├── setup-env.sh             # Deploy via Terraform (builds the layer first)
+│   └── rollback-setup.sh        # Destroy Terraform resources
 ├── infra/                       # Terraform module (main, iam, sns, s3, variables, outputs...)
-├── tests/unit/                  # 39 unit tests
+├── tests/unit/                  # 53 unit tests
 ├── docs-sdd/                    # SDD documentation (feature, prd, architecture...)
-├── requirements.txt             # Runtime dependencies
+├── requirements.txt             # Local/runtime dependencies
+├── requirements-lambda.txt      # Dependencies shipped as the Lambda layer
 └── requirements-dev.txt         # Test dependencies
 ```
 
@@ -143,6 +148,7 @@ aws-lambda-shutdown/
 ```json
 {
   "general": {
+    "timezone": "America/Sao_Paulo",
     "schedule": {
       "daysOfWeek": ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"],
       "times": ["03:00", "06:00", "22:00", "23:59"]
@@ -152,22 +158,23 @@ aws-lambda-shutdown/
     }
   },
   "services": [
-    { "name": "ec2" },
-    { "name": "rds" },
-    { "name": "ecs" },
-    { "name": "glue-batch" },
-    { "name": "glue-stream" },
-    { "name": "aurora" },
-    { "name": "batch" },
-    { "name": "dms" },
-    { "name": "dms-serverless" }
+    { "name": "ec2", "enabled": true },
+    { "name": "rds", "enabled": true },
+    { "name": "ecs", "enabled": true },
+    { "name": "glue-batch", "enabled": true },
+    { "name": "glue-stream", "enabled": false },
+    { "name": "aurora", "enabled": true },
+    { "name": "batch", "enabled": true },
+    { "name": "dms", "enabled": true },
+    { "name": "dms-serverless", "enabled": true }
   ]
 }
 ```
 
-- **`general.schedule`** — default days (`MON`–`SUN`) and times (`HH:MM`, 24h, UTC) applied to services without their own schedule.
+- **`general.timezone`** — IANA timezone (e.g. `America/Sao_Paulo`) used for the EventBridge Scheduler clock and schedule matching; defaults to `UTC`.
+- **`general.schedule`** — default days (`MON`–`SUN`) and times (`HH:MM`, 24h) applied to services without their own schedule; the times are interpreted in `general.timezone`.
 - **`general.notification.email`** — email that receives failure/error notifications.
-- **`services[]`** — each entry can add an optional `schedule` to override the general one:
+- **`services[]`** — each entry can add an optional `schedule` to override the general one and an `enabled` flag (default `true`) to pause its shutdown. A time served only by `enabled: false` services keeps its scheduler but in `DISABLED` state:
 
 ```json
 { "name": "ec2", "schedule": { "daysOfWeek": ["MON", "FRI"], "times": ["22:00"] } }
@@ -222,31 +229,35 @@ Fill in `config.json` with your services, schedules, and notification email.
 pytest tests/ -v
 ```
 
-### 4. Package the Lambda
+### 4. Build the dependency layer
 
-Create a zip containing `src/` and the runtime dependencies (boto3 and pydantic are bundled in the Lambda runtime layer or must be included):
+Runtime dependencies not provided by the Lambda runtime (e.g. `jsonschema`) are shipped as a **Lambda Layer** (boto3/botocore come bundled in the Python runtime):
 
 ```bash
-# Example: package with dependencies into a deployment zip
-mkdir -p build
-cp -r src build/
-pip install -r requirements.txt --target build/
-cd build && zip -r ../lambda-package.zip . && cd ..
+./scripts/build-layer.sh
 ```
+
+This installs the wheels (Linux, `x86_64`) from `requirements-lambda.txt` into `build/layer/python/lib/python3.13/site-packages`, which Terraform packages into `dist/layer.zip` and attaches to the function.
 
 ### 5. Deploy the infrastructure with Terraform
 
 ```bash
 cd infra
 cp terraform.tfvars.example terraform.tfvars
-# edit terraform.tfvars: region, notification_email, config_bucket_name, lambda_package_path
+# edit terraform.tfvars: region, notification_email, config_bucket_name, lambda_source_path, ...
 
 terraform init
 terraform plan
 terraform apply
 ```
 
-This provisions the SNS topic + email subscription, the S3 bucket for `config.json`, the Lambda IAM role/policy, the Lambda function, and the scheduler IAM role.
+Or run the bundled setup script (builds the layer automatically):
+
+```bash
+./scripts/setup-env.sh        # prod / us-east-1 by default
+```
+
+This provisions the SNS topic + email subscription, the S3 bucket for `config.json`, the Lambda IAM role/policy, the Lambda function (with the dependency layer), and the scheduler IAM role.
 
 ### 6. Upload the config to S3
 
@@ -266,6 +277,12 @@ python -m src generate-schedulers
 ```
 
 This creates one scheduler per unique time (`shutdown-0300`, `shutdown-2200`, ...). Re-run it any time you change `config.json` — it is idempotent and removes stale schedulers.
+
+To delete **all** `shutdown-*` schedulers (no environment variables needed):
+
+```bash
+python -m src remove-schedulers
+```
 
 ### 8. Verify
 

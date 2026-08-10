@@ -8,3 +8,7 @@
 # lambda_runtime = "python3.13"
 # lambda_output_path = "../dist/lambda.zip"
 # config_file_path = "../config.json"
+
+# Lambda layer (runtime deps como jsonschema) — gerado por ./scripts/build-layer.sh
+# layer_source_path = "../build/layer"
+# layer_output_path = "../dist/layer.zip"

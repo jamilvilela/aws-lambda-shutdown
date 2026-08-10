@@ -24,6 +24,7 @@ data "archive_file" "lambda_package" {
     ".git",
     ".github",
     ".venv",
+    "build",
     "infra",
     "tests",
     "docs-sdd",
@@ -34,11 +35,30 @@ data "archive_file" "lambda_package" {
     "config.json",
     "requirements.txt",
     "requirements-dev.txt",
+    "requirements-lambda.txt",
     "**/__pycache__",
     "**/*.pyc",
     "**/*.egg-info",
     "**/*.md",
   ]
+}
+
+# Build the dependency layer (jsonschema + transitives) into a zip via the
+# archive provider. The contents (build/layer/python/lib/python3.x/site-packages)
+# are prepared by scripts/build-layer.sh; boto3/botocore come from the runtime.
+data "archive_file" "lambda_layer" {
+  type        = "zip"
+  source_dir  = var.layer_source_path
+  output_path = var.layer_output_path
+  excludes    = ["**/__pycache__", "**/*.pyc", "**/*.egg-info"]
+}
+
+resource "aws_lambda_layer_version" "deps" {
+  layer_name               = "${local.name_prefix}-deps"
+  filename                 = data.archive_file.lambda_layer.output_path
+  source_code_hash         = data.archive_file.lambda_layer.output_base64sha256
+  compatible_runtimes      = [var.lambda_runtime]
+  compatible_architectures = ["x86_64"]
 }
 
 # Upload config.json to S3 bucket.
@@ -56,6 +76,7 @@ resource "aws_lambda_function" "shutdown" {
   handler          = "src.handler.lambda_handler"
   filename         = data.archive_file.lambda_package.output_path
   source_code_hash = data.archive_file.lambda_package.output_base64sha256
+  layers           = [aws_lambda_layer_version.deps.arn]
   timeout          = 900
   memory_size      = 256
   tags             = local.common_tags

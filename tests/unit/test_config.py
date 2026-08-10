@@ -72,6 +72,37 @@ def test_validate_invalid_time_format():
         validate_config(data)
 
 
+def test_validate_timezone_defaults_to_utc(valid_config_dict):
+    config = validate_config(valid_config_dict)
+    assert config.general.timezone == "UTC"
+
+
+def test_validate_timezone_set():
+    data = {
+        "general": {
+            "timezone": "America/Sao_Paulo",
+            "schedule": {"daysOfWeek": ["MON"], "times": ["03:00"]},
+            "notification": {"email": "a@b.c"},
+        },
+        "services": [{"name": "ec2"}],
+    }
+    config = validate_config(data)
+    assert config.general.timezone == "America/Sao_Paulo"
+
+
+def test_validate_invalid_timezone():
+    data = {
+        "general": {
+            "timezone": "Mars/Olympus",
+            "schedule": {"daysOfWeek": ["MON"], "times": ["03:00"]},
+            "notification": {"email": "a@b.c"},
+        },
+        "services": [{"name": "ec2"}],
+    }
+    with pytest.raises(ConfigValidationError):
+        validate_config(data)
+
+
 def test_validate_service_without_schedule_inherits_general(valid_config_dict):
     config = validate_config(valid_config_dict)
     # rds has no schedule, should inherit general
