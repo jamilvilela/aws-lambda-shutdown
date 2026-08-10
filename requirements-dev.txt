@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8.0.0
+moto>=5.0.0
+tzdata>=2024.1

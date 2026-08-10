@@ -48,6 +48,19 @@ coverage.xml
 *.cover
 *.py.cover
 .hypothesis/
+
+# Terraform
+.terraform/
+.terraform.*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 .pytest_cache/
 cover/
 
