@@ -136,6 +136,7 @@ def test_aurora_handler_stops_active():
 def test_batch_handler_terminates_running():
     batch = MagicMock()
     batch.get_paginator.return_value.paginate.side_effect = [
+        [{"jobQueues": [{"jobQueueArn": "arn:queue-1"}]}],  # describe_job_queues
         [{"jobSummaryList": [{"jobId": "job-1"}]}],  # RUNNING
         [{"jobSummaryList": []}],  # SUBMITTED
         [{"jobSummaryList": []}],  # PENDING
@@ -171,12 +172,12 @@ def test_dms_handler_stops_tasks_and_instances():
 
 def test_dms_serverless_handler_stops_configs():
     dms = MagicMock()
-    dms.get_paginator.return_value.paginate.return_value = [
-        {"ReplicationConfigs": [
+    dms.describe_replication_configs.return_value = {
+        "ReplicationConfigs": [
             {"ReplicationConfigArn": "arn:config-1", "Status": "running"},
             {"ReplicationConfigArn": "arn:config-2", "Status": "stopped"},
-        ]}
-    ]
+        ]
+    }
     handler = DMSServerlessHandler(dms)
     failures = handler.run()
     assert failures == []

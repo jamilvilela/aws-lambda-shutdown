@@ -28,15 +28,11 @@
     },
     {
       "name": "glue-stream",
-      "enabled": false
+      "enabled": true
     },
     {
       "name": "aurora",
-      "enabled": true,
-      "schedule": {
-        "daysOfWeek": ["MON"],
-        "times": ["01:30"]
-      }
+      "enabled": true
     },
     {
       "name": "batch",

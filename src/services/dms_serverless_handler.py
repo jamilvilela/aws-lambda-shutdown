@@ -17,12 +17,20 @@ class DMSServerlessHandler(ServiceHandler):
 
     def list_active_items(self) -> List[str]:
         configs: List[str] = []
-        paginator = self._dms.get_paginator("describe_replication_configs")
-        for page in paginator.paginate():
-            for config in page.get("ReplicationConfigs", []):
-                if config.get("Status") in RUNNING_STATUSES:
-                    configs.append(config["ReplicationConfigArn"])
+        for config in self._list_replication_configs():
+            if config.get("Status") in RUNNING_STATUSES:
+                configs.append(config["ReplicationConfigArn"])
         return configs
 
     def shutdown_item(self, item_id: str) -> None:
         self._dms.stop_replication(ReplicationConfigArn=item_id)
+
+    def _list_replication_configs(self) -> List[dict]:
+        configs: List[dict] = []
+        kwargs: dict[str, Any] = {}
+        while True:
+            page = self._dms.describe_replication_configs(**kwargs)
+            configs.extend(page.get("ReplicationConfigs", []))
+            if not page.get("Marker"):
+                return configs
+            kwargs["Marker"] = page["Marker"]
