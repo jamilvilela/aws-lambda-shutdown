@@ -4,9 +4,9 @@
 # Script de deploy do ambiente AWS para a Lambda de shutdown (aws-lambda-shutdown)
 #
 # Uso:
-#   ./scripts/setup-env.sh                          # Usa valores default (prod)
-#   ./scripts/setup-env.sh -e dev                    # Ambiente específico
-#   ./scripts/setup-env.sh -e prod -r us-east-1      # Ambiente + região
+#   ./deploy_scripts/setup-env.sh                          # Usa valores default (prod)
+#   ./deploy_scripts/setup-env.sh -e dev                    # Ambiente específico
+#   ./deploy_scripts/setup-env.sh -e prod -r us-east-1      # Ambiente + região
 #
 # Dependências:
 #   - Terraform >= 1.5
@@ -16,7 +16,7 @@
 #   - O pacote da Lambda é gerado pelo próprio Terraform (provider archive),
 #     sem etapa externa de zip via shell.
 #   - As dependências de runtime (jsonschema e afins) são empacotadas em uma
-#     Lambda Layer via ./scripts/build-layer.sh (executado automaticamente antes
+#     Lambda Layer via ./deploy_scripts/build-layer.sh (executado automaticamente antes
 #     do apply). boto3/botocore são fornecidos pelo runtime.
 #   - Os EventBridge Schedulers não são gerenciados pelo Terraform; após o
 #     apply, gere-os com `python -m src generate-schedulers` (ver README).
@@ -129,7 +129,7 @@ select_workspace() {
 # ─── Construir a Lambda Layer (deps de runtime) ──────────────────────────────
 build_layer() {
     log_info "Construindo a Lambda Layer (deps de runtime) ..."
-    "${REPO_ROOT}/scripts/build-layer.sh"
+    "${REPO_ROOT}/deploy_scripts/build-layer.sh"
     log_ok "Lambda Layer construída"
 }
 
